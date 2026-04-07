@@ -383,7 +383,7 @@ LightmapGIData::~LightmapGIData() {
 
 void LightmapGI::_find_meshes_and_lights(Node *p_at_node, Vector<MeshesFound> &meshes, Vector<LightsFound> &lights, Vector<Vector3> &probes) {
 	MeshInstance3D *mi = Object::cast_to<MeshInstance3D>(p_at_node);
-	if (mi && mi->get_gi_mode() == GeometryInstance3D::GI_MODE_STATIC && mi->is_visible_in_tree()) {
+	if (mi && (mi->get_gi_mode() == GeometryInstance3D::GI_MODE_STATIC || mi->get_gi_mode() == GeometryInstance3D::GI_MODE_STATIC_CONTRIBUTE_ONLY) && mi->is_visible_in_tree()) {
 		Ref<Mesh> mesh = mi->get_mesh();
 		if (mesh.is_valid()) {
 			bool all_have_uv2_and_normal = true;
@@ -412,6 +412,7 @@ void LightmapGI::_find_meshes_and_lights(Node *p_at_node, Vector<MeshesFound> &m
 				mf.subindex = -1;
 				mf.mesh = mesh;
 				mf.lightmap_scale = mi->get_lightmap_texel_scale();
+				mf.contribute_only = mi->get_gi_mode() == GeometryInstance3D::GI_MODE_STATIC_CONTRIBUTE_ONLY;
 
 				Ref<Material> all_override = mi->get_material_override();
 				for (int i = 0; i < mesh->get_surface_count(); i++) {
@@ -446,6 +447,7 @@ void LightmapGI::_find_meshes_and_lights(Node *p_at_node, Vector<MeshesFound> &m
 				mf.node_path = get_path_to(s);
 				mf.subindex = i / 2;
 				mf.lightmap_scale = 1.0;
+				mf.contribute_only = false;
 				mf.mesh = mesh;
 
 				meshes.push_back(mf);
@@ -926,8 +928,18 @@ LightmapGI::BakeError LightmapGI::bake(Node *p_from_node, String p_image_data_pa
 		Vector<MeshesFound> meshes_found;
 		_find_meshes_and_lights(p_from_node ? p_from_node : get_parent(), meshes_found, lights_found, probes_found);
 
-		if (meshes_found.is_empty()) {
-			return BAKE_ERROR_NO_MESHES;
+		{
+			bool has_one_lit_mesh = false;
+			for (MeshesFound &mf : meshes_found) {
+				if (!mf.contribute_only) {
+					has_one_lit_mesh = true;
+					break;
+				}
+			}
+
+			if (!has_one_lit_mesh) {
+				return BAKE_ERROR_NO_MESHES;
+			}
 		}
 		// create mesh data for insert
 
@@ -1077,6 +1089,8 @@ LightmapGI::BakeError LightmapGI::bake(Node *p_from_node, String p_image_data_pa
 					}
 				}
 			}
+
+			md.contribute_only = mf.contribute_only;
 
 			mesh_data.push_back(md);
 		}
@@ -1331,6 +1345,10 @@ LightmapGI::BakeError LightmapGI::bake(Node *p_from_node, String p_image_data_pa
 	gi_data->_set_uses_packed_directional(directional); // New SH lightmaps are packed automatically.
 
 	for (int i = 0; i < lightmapper->get_bake_mesh_count(); i++) {
+		if (lightmapper->get_bake_mesh_is_contribute_only(i)) {
+			continue;
+		}
+
 		Dictionary d = lightmapper->get_bake_mesh_userdata(i);
 		NodePath np = d["path"];
 		int32_t subindex = -1;

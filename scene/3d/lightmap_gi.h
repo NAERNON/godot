@@ -221,6 +221,7 @@ private:
 		int32_t subindex = 0;
 		Ref<Mesh> mesh;
 		float lightmap_scale = 0.0;
+		bool contribute_only;
 		Vector<Ref<Material>> overrides;
 	};
 

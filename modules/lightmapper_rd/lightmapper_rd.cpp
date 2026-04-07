@@ -246,20 +246,28 @@ void LightmapperRD::_sort_triangle_clusters(uint32_t p_cluster_size, uint32_t p_
 	}
 }
 
-Lightmapper::BakeError LightmapperRD::_blit_meshes_into_atlas(int p_max_texture_size, int p_denoiser_range, Vector<Ref<Image>> &albedo_images, Vector<Ref<Image>> &emission_images, AABB &bounds, Size2i &atlas_size, int &atlas_slices, float p_supersampling_factor, BakeStepFunc p_step_function, void *p_bake_userdata) {
+Lightmapper::BakeError LightmapperRD::_blit_meshes_into_atlas(int p_max_texture_size, int p_denoiser_range, Vector<Ref<Image>> &albedo_images, Vector<Ref<Image>> &emission_images, AABB &bounds, AtlasInfo &render_atlas, AtlasInfo &final_atlas, float p_supersampling_factor, BakeStepFunc p_step_function, void *p_bake_userdata) {
 	Vector<Size2i> sizes;
 
 	for (int m_i = 0; m_i < mesh_instances.size(); m_i++) {
 		MeshInstance &mi = mesh_instances.write[m_i];
 		Size2i s = Size2i(mi.data.albedo_on_uv2->get_width(), mi.data.albedo_on_uv2->get_height());
 		sizes.push_back(s);
-		atlas_size = atlas_size.max(s + Size2i(2, 2).maxi(p_denoiser_range) * p_supersampling_factor);
+		Size2i extend = s + Size2i(2, 2).maxi(p_denoiser_range) * p_supersampling_factor;
+
+		if (mi.data.contribute_only) {
+			render_atlas.size = render_atlas.size.max(extend);
+		} else {
+			final_atlas.size = final_atlas.size.max(extend);
+		}
 	}
 
-	int max = nearest_power_of_2_templated(atlas_size.width);
-	max = MAX(max, nearest_power_of_2_templated(atlas_size.height));
+	int final_max = nearest_power_of_2_templated(final_atlas.size.width);
+	final_max = MAX(final_max, nearest_power_of_2_templated(final_atlas.size.height));
+	int render_max = nearest_power_of_2_templated(render_atlas.size.width);
+	render_max = MAX(render_max, nearest_power_of_2_templated(render_atlas.size.height));
 
-	if (max > p_max_texture_size) {
+	if (final_max > p_max_texture_size) {
 		return BAKE_ERROR_TEXTURE_EXCEEDS_MAX_SIZE;
 	}
 
@@ -269,33 +277,38 @@ Lightmapper::BakeError LightmapperRD::_blit_meshes_into_atlas(int p_max_texture_
 		}
 	}
 
-	atlas_size = Size2i(max, max);
+	final_atlas.size = Size2i(final_max, final_max);
+	render_atlas.size = Size2i(render_max, render_max);
 
-	Size2i best_atlas_size;
-	int best_atlas_slices = 0;
-	int best_atlas_memory = 0x7FFFFFFF;
+	Size2i best_final_atlas_size;
+	int best_final_atlas_slices = 0;
+	int best_final_atlas_memory = 0x7FFFFFFF;
 	Vector<Vector3i> best_atlas_offsets;
 
-	// Determine best texture array atlas size by bruteforce fitting.
-	while (atlas_size.x <= p_max_texture_size && atlas_size.y <= p_max_texture_size) {
+	// Determine best final texture array atlas size by bruteforce fitting.
+	// For the final atlas, contribute only meshes are ignored.
+	while (final_atlas.size.x <= p_max_texture_size && final_atlas.size.y <= p_max_texture_size) {
 		Vector<Vector2i> source_sizes;
 		Vector<int> source_indices;
-		source_sizes.resize(sizes.size());
-		source_indices.resize(sizes.size());
-		for (int i = 0; i < source_indices.size(); i++) {
+
+		for (int i = 0; i < sizes.size(); i++) {
+			if (mesh_instances[i].data.contribute_only) {
+				continue;
+			}
+
 			// Add padding between lightmaps.
 			// Scale the padding if the lightmap will be downsampled at the end of the baking process
 			// Otherwise the padding would be insufficient.
-			source_sizes.write[i] = sizes[i] + Vector2i(2, 2).maxi(p_denoiser_range) * p_supersampling_factor;
-			source_indices.write[i] = i;
+			source_sizes.push_back(sizes[i] + Size2i(2, 2).maxi(p_denoiser_range) * p_supersampling_factor);
+			source_indices.push_back(i);
 		}
 		Vector<Vector3i> atlas_offsets;
-		atlas_offsets.resize(source_sizes.size());
+		atlas_offsets.resize(sizes.size());
 
 		// Ensure the sizes can all fit into a single atlas layer.
 		// This should always happen, and this check is only in place to prevent an infinite loop.
 		for (int i = 0; i < source_sizes.size(); i++) {
-			if (source_sizes[i] > atlas_size) {
+			if (source_sizes[i] > final_atlas.size) {
 				return BAKE_ERROR_ATLAS_TOO_SMALL;
 			}
 		}
@@ -303,7 +316,7 @@ Lightmapper::BakeError LightmapperRD::_blit_meshes_into_atlas(int p_max_texture_
 		int slices = 0;
 
 		while (source_sizes.size() > 0) {
-			Vector<Vector3i> offsets = Geometry2D::partial_pack_rects(source_sizes, atlas_size);
+			Vector<Vector3i> offsets = Geometry2D::partial_pack_rects(source_sizes, final_atlas.size);
 			Vector<int> new_indices;
 			Vector<Vector2i> new_sources;
 			for (int i = 0; i < offsets.size(); i++) {
@@ -324,26 +337,85 @@ Lightmapper::BakeError LightmapperRD::_blit_meshes_into_atlas(int p_max_texture_
 			slices++;
 		}
 
-		int mem_used = atlas_size.x * atlas_size.y * slices;
-		if (mem_used < best_atlas_memory) {
-			best_atlas_size = atlas_size;
+		int mem_used = final_atlas.size.x * final_atlas.size.y * slices;
+		if (mem_used < best_final_atlas_memory) {
+			best_final_atlas_size = final_atlas.size;
 			best_atlas_offsets = atlas_offsets;
-			best_atlas_slices = slices;
-			best_atlas_memory = mem_used;
+			best_final_atlas_slices = slices;
+			best_final_atlas_memory = mem_used;
 		}
 
-		if (atlas_size.width == atlas_size.height) {
-			atlas_size.width *= 2;
+		if (final_atlas.size.width == final_atlas.size.height) {
+			final_atlas.size.width *= 2;
 		} else {
-			atlas_size.height *= 2;
+			final_atlas.size.height *= 2;
 		}
 	}
-	atlas_size = best_atlas_size;
-	atlas_slices = best_atlas_slices;
+	final_atlas.size = best_final_atlas_size;
+	final_atlas.slices = best_final_atlas_slices;
+
+	// Determine the render texture array atlas size.
+	// The render atlas starts with the final_atlas,
+	// then adds contribute only meshes.
+	{
+		if (render_atlas.size <= final_atlas.size) {
+			render_atlas.size = final_atlas.size;
+		} else {
+			render_max = MAX(render_max, final_atlas.size.width);
+			render_max = MAX(render_max, final_atlas.size.height);
+			render_atlas.size = Size2i(render_max, render_max);
+		}
+		render_atlas.slices = final_atlas.slices;
+
+		Vector<Vector2i> source_sizes;
+		Vector<int> source_indices;
+
+		for (int i = 0; i < sizes.size(); i++) {
+			if (!mesh_instances[i].data.contribute_only) {
+				continue;
+			}
+
+			// Add padding between lightmaps.
+			// Scale the padding if the lightmap will be downsampled at the end of the baking process
+			// Otherwise the padding would be insufficient.
+			source_sizes.push_back(sizes[i] + Size2i(2, 2).maxi(p_denoiser_range) * p_supersampling_factor);
+			source_indices.push_back(i);
+		}
+
+		// Ensure the sizes can all fit into a single atlas layer.
+		// This should always happen, and this check is only in place to prevent an infinite loop.
+		for (int i = 0; i < source_sizes.size(); i++) {
+			if (source_sizes[i] > render_atlas.size) {
+				return BAKE_ERROR_ATLAS_TOO_SMALL;
+			}
+		}
+
+		while (source_sizes.size() > 0) {
+			Vector<Vector3i> offsets = Geometry2D::partial_pack_rects(source_sizes, render_atlas.size);
+			Vector<int> new_indices;
+			Vector<Vector2i> new_sources;
+			for (int i = 0; i < offsets.size(); i++) {
+				Vector3i ofs = offsets[i];
+				int sidx = source_indices[i];
+				if (ofs.z > 0) {
+					//valid
+					ofs.z = render_atlas.slices;
+					best_atlas_offsets.write[sidx] = ofs + Vector3i(1, 1, 0); // Center lightmap in the reserved oversized region
+				} else {
+					new_indices.push_back(sidx);
+					new_sources.push_back(source_sizes[i]);
+				}
+			}
+
+			source_sizes = new_sources;
+			source_indices = new_indices;
+			render_atlas.slices++;
+		}
+	}
 
 	// apply the offsets and slice to all images, and also blit albedo and emission
-	albedo_images.resize(atlas_slices);
-	emission_images.resize(atlas_slices);
+	albedo_images.resize(render_atlas.slices);
+	emission_images.resize(render_atlas.slices);
 
 	if (p_step_function) {
 		if (p_step_function(0.2, RTR("Blitting albedo and emission"), p_bake_userdata, true)) {
@@ -351,12 +423,12 @@ Lightmapper::BakeError LightmapperRD::_blit_meshes_into_atlas(int p_max_texture_
 		}
 	}
 
-	for (int i = 0; i < atlas_slices; i++) {
-		Ref<Image> albedo = Image::create_empty(atlas_size.width, atlas_size.height, false, Image::FORMAT_RGBA8);
+	for (int i = 0; i < render_atlas.slices; i++) {
+		Ref<Image> albedo = Image::create_empty(render_atlas.size.width, render_atlas.size.height, false, Image::FORMAT_RGBA8);
 		albedo->set_as_black();
 		albedo_images.write[i] = albedo;
 
-		Ref<Image> emission = Image::create_empty(atlas_size.width, atlas_size.height, false, Image::FORMAT_RGBAH);
+		Ref<Image> emission = Image::create_empty(render_atlas.size.width, render_atlas.size.height, false, Image::FORMAT_RGBAH);
 		emission->set_as_black();
 		emission_images.write[i] = emission;
 	}
@@ -1058,6 +1130,26 @@ LightmapperRD::BakeError LightmapperRD::_denoise(RenderingDevice *p_rd, Ref<RDSh
 	return BAKE_OK;
 }
 
+void LightmapperRD::_crop_texture(RenderingDevice *p_rd, RID &p_tex, AtlasInfo &p_to_atlas, bool p_bake_sh) {
+    RD::TextureFormat tf = p_rd->texture_get_format(p_tex);
+    tf.width = p_to_atlas.size.width;
+    tf.height = p_to_atlas.size.height;
+    tf.array_layers = p_to_atlas.slices;
+    if (p_bake_sh) {
+        tf.array_layers *= 4;
+    }
+
+    RID cropped_tex = p_rd->texture_create(tf, RD::TextureView());
+    p_rd->texture_clear(cropped_tex, Color(0, 0, 0, 0), 0, 1, 0, tf.array_layers);
+
+    for (int i = 0; i < p_to_atlas.slices * (p_bake_sh ? 4 : 1); i++) {
+        p_rd->texture_copy(p_tex, cropped_tex, Vector3(), Vector3(), Vector3(p_to_atlas.size.width, p_to_atlas.size.height, 1), 0, 0, i, i);
+    }
+
+	p_rd->free_rid(p_tex);
+	p_tex = cropped_tex;
+}
+
 LightmapperRD::BakeError LightmapperRD::bake(BakeQuality p_quality, bool p_use_denoiser, float p_denoiser_strength, int p_denoiser_range, int p_bounces, float p_bounce_indirect_energy, float p_bias, int p_max_texture_size, bool p_bake_sh, bool p_bake_shadowmask, bool p_texture_for_bounces, GenerateProbes p_generate_probes, const Ref<Image> &p_environment_panorama, const Basis &p_environment_transform, BakeStepFunc p_step_function, void *p_bake_userdata, float p_exposure_normalization, float p_supersampling_factor) {
 	int denoiser = GLOBAL_GET("rendering/lightmapping/denoising/denoiser");
 	String oidn_path = EDITOR_GET("filesystem/tools/oidn/oidn_denoise_path");
@@ -1086,15 +1178,18 @@ LightmapperRD::BakeError LightmapperRD::bake(BakeQuality p_quality, bool p_use_d
 	/* STEP 1: Fetch material textures and compute the bounds */
 
 	AABB bounds;
-	Size2i atlas_size;
-	int atlas_slices;
+	AtlasInfo render_atlas;
+	AtlasInfo final_atlas;
 	Vector<Ref<Image>> albedo_images;
 	Vector<Ref<Image>> emission_images;
 
-	BakeError bake_error = _blit_meshes_into_atlas(p_max_texture_size, p_denoiser_range, albedo_images, emission_images, bounds, atlas_size, atlas_slices, p_supersampling_factor, p_step_function, p_bake_userdata);
+	BakeError bake_error = _blit_meshes_into_atlas(p_max_texture_size, p_denoiser_range, albedo_images, emission_images, bounds, render_atlas, final_atlas, p_supersampling_factor, p_step_function, p_bake_userdata);
 	if (bake_error != BAKE_OK) {
 		return bake_error;
 	}
+
+	Size2i atlas_size = render_atlas.size;
+	int atlas_slices = render_atlas.slices;
 
 	// Find any directional light suitable for shadowmasking.
 	if (p_bake_shadowmask) {
@@ -2064,6 +2159,9 @@ LightmapperRD::BakeError LightmapperRD::bake(BakeQuality p_quality, bool p_use_d
 	}
 #endif
 
+	// From now on, only final atlas slices are considered.
+	atlas_slices = final_atlas.slices;
+
 	/* DENOISE */
 
 	if (p_bake_sh) {
@@ -2308,8 +2406,19 @@ LightmapperRD::BakeError LightmapperRD::bake(BakeQuality p_quality, bool p_use_d
 	}
 #endif
 
+	if (render_atlas.size != final_atlas.size) {
+		p_step_function(0.9, RTR("Cropping render textures"), p_bake_userdata, true);
+
+		_crop_texture(rd, light_accum_tex, final_atlas, p_bake_sh);
+		if (p_bake_shadowmask) {
+			_crop_texture(rd, shadowmask_tex, final_atlas, p_bake_sh);
+		}
+
+		atlas_size = final_atlas.size;
+	}
+
 	if (p_step_function) {
-		p_step_function(0.9, RTR("Retrieving textures"), p_bake_userdata, true);
+		p_step_function(0.91, RTR("Retrieving textures"), p_bake_userdata, true);
 	}
 
 	for (int i = 0; i < atlas_slices * (p_bake_sh ? 4 : 1); i++) {
@@ -2377,6 +2486,10 @@ Ref<Image> LightmapperRD::get_shadowmask_texture(int p_index) const {
 
 int LightmapperRD::get_bake_mesh_count() const {
 	return mesh_instances.size();
+}
+
+bool LightmapperRD::get_bake_mesh_is_contribute_only(int p_index) const {
+	return mesh_instances[p_index].data.contribute_only;
 }
 
 Variant LightmapperRD::get_bake_mesh_userdata(int p_index) const {
