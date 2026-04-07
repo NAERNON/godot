@@ -327,6 +327,7 @@ protected:
 	uint64_t track_map_version = 1;
 	int track_count = 0;
 	bool deterministic = false;
+	bool root_motion_ignores_blending = false;
 
 	/* ---- Root motion accumulator for Skeleton3D ---- */
 	NodePath root_motion_track;
@@ -422,6 +423,9 @@ public:
 
 	void set_deterministic(bool p_deterministic);
 	bool is_deterministic() const;
+
+	void set_root_motion_ignores_blending(bool p_root_motion_ignores_blending);
+	bool is_root_motion_ignores_blending() const;
 
 	void set_root_node(const NodePath &p_path);
 	NodePath get_root_node() const;

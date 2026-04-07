@@ -137,7 +137,7 @@ void AnimationMixer::_get_property_list(List<PropertyInfo> *p_list) const {
 
 void AnimationMixer::_validate_property(PropertyInfo &p_property) const {
 #ifdef TOOLS_ENABLED // `editing` is surrounded by TOOLS_ENABLED so this should also be.
-	if (Engine::get_singleton()->is_editor_hint() && editing && (p_property.name == "active" || p_property.name == "deterministic" || p_property.name == "root_motion_track")) {
+	if (Engine::get_singleton()->is_editor_hint() && editing && (p_property.name == "active" || p_property.name == "deterministic" || p_property.name == "root_motion_ignores_blending" || p_property.name == "root_motion_track")) {
 		p_property.usage |= PROPERTY_USAGE_READ_ONLY;
 		return;
 	}
@@ -499,6 +499,14 @@ void AnimationMixer::set_deterministic(bool p_deterministic) {
 
 bool AnimationMixer::is_deterministic() const {
 	return deterministic;
+}
+
+void AnimationMixer::set_root_motion_ignores_blending(bool p_root_motion_ignores_blending) {
+	root_motion_ignores_blending = p_root_motion_ignores_blending;
+}
+
+bool AnimationMixer::is_root_motion_ignores_blending() const {
+	return root_motion_ignores_blending;
 }
 
 void AnimationMixer::set_callback_mode_process(AnimationCallbackModeProcess p_mode) {
@@ -1275,6 +1283,7 @@ void AnimationMixer::_blend_process(double p_delta, bool p_update_only) {
 				}
 				blend = blend / track->total_weight;
 			}
+			real_t root_blend = root_motion_ignores_blending ? 1.0 : blend;
 			Animation::TrackType ttype = animation_track->type;
 			track->root_motion = root_motion_track == animation_track->path;
 			switch (ttype) {
@@ -1339,7 +1348,7 @@ void AnimationMixer::_blend_process(double p_delta, bool p_update_only) {
 									a->try_rotation_track_interpolate(rot_track, end, &rot);
 									rot = post_process_key_value(a, rot_track, rot, t->object_id, t->bone_idx);
 
-									root_motion_cache.loc += rot.xform_inv(loc[1] - loc[0]) * blend;
+									root_motion_cache.loc += rot.xform_inv(loc[1] - loc[0]) * root_blend;
 									prev_time = start;
 								}
 							} else {
@@ -1355,7 +1364,7 @@ void AnimationMixer::_blend_process(double p_delta, bool p_update_only) {
 									a->try_rotation_track_interpolate(rot_track, start, &rot);
 									rot = post_process_key_value(a, rot_track, rot, t->object_id, t->bone_idx);
 
-									root_motion_cache.loc += rot.xform_inv(loc[1] - loc[0]) * blend;
+									root_motion_cache.loc += rot.xform_inv(loc[1] - loc[0]) * root_blend;
 									prev_time = end;
 								}
 							}
@@ -1370,7 +1379,7 @@ void AnimationMixer::_blend_process(double p_delta, bool p_update_only) {
 							a->try_rotation_track_interpolate(rot_track, time, &rot);
 							rot = post_process_key_value(a, rot_track, rot, t->object_id, t->bone_idx);
 
-							root_motion_cache.loc += rot.xform_inv(loc[1] - loc[0]) * blend;
+							root_motion_cache.loc += rot.xform_inv(loc[1] - loc[0]) * root_blend;
 							prev_time = !backward ? start : end;
 						} else {
 							Vector3 loc[2];
@@ -1383,7 +1392,7 @@ void AnimationMixer::_blend_process(double p_delta, bool p_update_only) {
 									loc[0] = post_process_key_value(a, i, loc[0], t->object_id, t->bone_idx);
 									a->try_position_track_interpolate(i, end, &loc[1]);
 									loc[1] = post_process_key_value(a, i, loc[1], t->object_id, t->bone_idx);
-									root_motion_cache.loc += (loc[1] - loc[0]) * blend;
+									root_motion_cache.loc += (loc[1] - loc[0]) * root_blend;
 									prev_time = start;
 								}
 							} else {
@@ -1395,7 +1404,7 @@ void AnimationMixer::_blend_process(double p_delta, bool p_update_only) {
 									loc[0] = post_process_key_value(a, i, loc[0], t->object_id, t->bone_idx);
 									a->try_position_track_interpolate(i, start, &loc[1]);
 									loc[1] = post_process_key_value(a, i, loc[1], t->object_id, t->bone_idx);
-									root_motion_cache.loc += (loc[1] - loc[0]) * blend;
+									root_motion_cache.loc += (loc[1] - loc[0]) * root_blend;
 									prev_time = end;
 								}
 							}
@@ -1406,7 +1415,7 @@ void AnimationMixer::_blend_process(double p_delta, bool p_update_only) {
 							loc[0] = post_process_key_value(a, i, loc[0], t->object_id, t->bone_idx);
 							a->try_position_track_interpolate(i, time, &loc[1]);
 							loc[1] = post_process_key_value(a, i, loc[1], t->object_id, t->bone_idx);
-							root_motion_cache.loc += (loc[1] - loc[0]) * blend;
+							root_motion_cache.loc += (loc[1] - loc[0]) * root_blend;
 							prev_time = !backward ? start : end;
 						}
 					}
@@ -1472,7 +1481,7 @@ void AnimationMixer::_blend_process(double p_delta, bool p_update_only) {
 								rot[0] = post_process_key_value(a, i, rot[0], t->object_id, t->bone_idx);
 								a->try_rotation_track_interpolate(i, end, &rot[1]);
 								rot[1] = post_process_key_value(a, i, rot[1], t->object_id, t->bone_idx);
-								root_motion_cache.rot = Animation::interpolate_via_rest(root_motion_cache.rot, rot[1], blend, rot[0]);
+								root_motion_cache.rot = Animation::interpolate_via_rest(root_motion_cache.rot, rot[1], root_blend, rot[0]);
 								prev_time = start;
 							}
 						} else {
@@ -1484,7 +1493,7 @@ void AnimationMixer::_blend_process(double p_delta, bool p_update_only) {
 								rot[0] = post_process_key_value(a, i, rot[0], t->object_id, t->bone_idx);
 								a->try_rotation_track_interpolate(i, start, &rot[1]);
 								rot[1] = post_process_key_value(a, i, rot[1], t->object_id, t->bone_idx);
-								root_motion_cache.rot = Animation::interpolate_via_rest(root_motion_cache.rot, rot[1], blend, rot[0]);
+								root_motion_cache.rot = Animation::interpolate_via_rest(root_motion_cache.rot, rot[1], root_blend, rot[0]);
 								prev_time = end;
 							}
 						}
@@ -1495,7 +1504,7 @@ void AnimationMixer::_blend_process(double p_delta, bool p_update_only) {
 						rot[0] = post_process_key_value(a, i, rot[0], t->object_id, t->bone_idx);
 						a->try_rotation_track_interpolate(i, time, &rot[1]);
 						rot[1] = post_process_key_value(a, i, rot[1], t->object_id, t->bone_idx);
-						root_motion_cache.rot = Animation::interpolate_via_rest(root_motion_cache.rot, rot[1], blend, rot[0]);
+						root_motion_cache.rot = Animation::interpolate_via_rest(root_motion_cache.rot, rot[1], root_blend, rot[0]);
 						prev_time = !backward ? start : end;
 					}
 					{
@@ -1560,7 +1569,7 @@ void AnimationMixer::_blend_process(double p_delta, bool p_update_only) {
 								scale[0] = post_process_key_value(a, i, scale[0], t->object_id, t->bone_idx);
 								a->try_scale_track_interpolate(i, end, &scale[1]);
 								scale[1] = post_process_key_value(a, i, scale[1], t->object_id, t->bone_idx);
-								root_motion_cache.scale += (scale[1] - scale[0]) * blend;
+								root_motion_cache.scale += (scale[1] - scale[0]) * root_blend;
 								prev_time = start;
 							}
 						} else {
@@ -1572,7 +1581,7 @@ void AnimationMixer::_blend_process(double p_delta, bool p_update_only) {
 								scale[0] = post_process_key_value(a, i, scale[0], t->object_id, t->bone_idx);
 								a->try_scale_track_interpolate(i, start, &scale[1]);
 								scale[1] = post_process_key_value(a, i, scale[1], t->object_id, t->bone_idx);
-								root_motion_cache.scale += (scale[1] - scale[0]) * blend;
+								root_motion_cache.scale += (scale[1] - scale[0]) * root_blend;
 								prev_time = end;
 							}
 						}
@@ -1583,7 +1592,7 @@ void AnimationMixer::_blend_process(double p_delta, bool p_update_only) {
 						scale[0] = post_process_key_value(a, i, scale[0], t->object_id, t->bone_idx);
 						a->try_scale_track_interpolate(i, time, &scale[1]);
 						scale[1] = post_process_key_value(a, i, scale[1], t->object_id, t->bone_idx);
-						root_motion_cache.scale += (scale[1] - scale[0]) * blend;
+						root_motion_cache.scale += (scale[1] - scale[0]) * root_blend;
 						prev_time = !backward ? start : end;
 					}
 					{
@@ -2462,6 +2471,9 @@ void AnimationMixer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_deterministic", "deterministic"), &AnimationMixer::set_deterministic);
 	ClassDB::bind_method(D_METHOD("is_deterministic"), &AnimationMixer::is_deterministic);
 
+	ClassDB::bind_method(D_METHOD("set_root_motion_ignores_blending", "root_motion_ignores_blending"), &AnimationMixer::set_root_motion_ignores_blending);
+	ClassDB::bind_method(D_METHOD("is_root_motion_ignores_blending"), &AnimationMixer::is_root_motion_ignores_blending);
+
 	ClassDB::bind_method(D_METHOD("set_root_node", "path"), &AnimationMixer::set_root_node);
 	ClassDB::bind_method(D_METHOD("get_root_node"), &AnimationMixer::get_root_node);
 
@@ -2505,6 +2517,7 @@ void AnimationMixer::_bind_methods() {
 
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "active"), "set_active", "is_active");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "deterministic"), "set_deterministic", "is_deterministic");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "root_motion_ignores_blending"), "set_root_motion_ignores_blending", "is_root_motion_ignores_blending");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "reset_on_save", PROPERTY_HINT_NONE, ""), "set_reset_on_save_enabled", "is_reset_on_save_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "root_node"), "set_root_node", "get_root_node");
 
