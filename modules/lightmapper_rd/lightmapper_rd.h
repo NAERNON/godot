@@ -294,7 +294,12 @@ class LightmapperRD : public Lightmapper {
 		uint32_t pad;
 	};
 
-	BakeError _blit_meshes_into_atlas(int p_max_texture_size, int p_denoiser_range, Vector<Ref<Image>> &albedo_images, Vector<Ref<Image>> &emission_images, AABB &bounds, Size2i &atlas_size, int &atlas_slices, float p_supersampling_factor, BakeStepFunc p_step_function, void *p_bake_userdata);
+	struct AtlasInfo {
+		Size2i size;
+		int slices;
+	};
+
+	BakeError _blit_meshes_into_atlas(int p_max_texture_size, int p_denoiser_range, Vector<Ref<Image>> &albedo_images, Vector<Ref<Image>> &emission_images, AABB &bounds, AtlasInfo &render_atlas, AtlasInfo &final_atlas, float p_supersampling_factor, BakeStepFunc p_step_function, void *p_bake_userdata);
 	void _create_acceleration_structures(RenderingDevice *rd, Size2i atlas_size, int atlas_slices, AABB &bounds, int grid_size, uint32_t p_cluster_size, Vector<Probe> &probe_positions, GenerateProbes p_generate_probes, Vector<int> &slice_triangle_count, Vector<int> &slice_seam_count, RID &vertex_buffer, RID &triangle_buffer, RID &lights_buffer, RID &r_triangle_indices_buffer, RID &r_cluster_indices_buffer, RID &r_cluster_aabbs_buffer, RID &probe_positions_buffer, RID &grid_texture, RID &seams_buffer, BakeStepFunc p_step_function, void *p_bake_userdata);
 	void _raster_geometry(RenderingDevice *rd, Size2i atlas_size, int atlas_slices, int grid_size, AABB bounds, float p_bias, Vector<int> slice_triangle_count, RID position_tex, RID unocclude_tex, RID normal_tex, RID raster_depth_buffer, RID rasterize_shader, RID raster_base_uniform);
 
@@ -305,6 +310,8 @@ class LightmapperRD : public Lightmapper {
 	Error _store_pfm(RenderingDevice *p_rd, RID p_atlas_tex, int p_index, const Size2i &p_atlas_size, const String &p_name, bool p_shadowmask);
 	Ref<Image> _read_pfm(const String &p_name, bool p_shadowmask);
 	BakeError _denoise_oidn(RenderingDevice *p_rd, RID p_source_light_tex, RID p_source_normal_tex, RID p_dest_light_tex, const Size2i &p_atlas_size, int p_atlas_slices, bool p_bake_sh, bool p_shadowmask, const String &p_exe);
+
+	void _crop_texture(RenderingDevice *p_rd, RID &p_tex, AtlasInfo &p_to_atlas, bool p_bake_sh);
 
 public:
 	virtual void add_mesh(const MeshData &p_mesh) override;
@@ -321,6 +328,7 @@ public:
 	int get_shadowmask_texture_count() const override;
 	Ref<Image> get_shadowmask_texture(int p_index) const override;
 	int get_bake_mesh_count() const override;
+	bool get_bake_mesh_is_contribute_only(int p_index) const override;
 	Variant get_bake_mesh_userdata(int p_index) const override;
 	Rect2 get_bake_mesh_uv_scale(int p_index) const override;
 	int get_bake_mesh_texture_slice(int p_index) const override;
