@@ -165,6 +165,7 @@ public:
 		Ref<Image> albedo_on_uv2;
 		Ref<Image> emission_on_uv2;
 		Variant userdata;
+		bool contribute_only;
 	};
 
 	virtual void add_mesh(const MeshData &p_mesh) = 0;
@@ -181,6 +182,7 @@ public:
 	virtual int get_shadowmask_texture_count() const = 0;
 	virtual Ref<Image> get_shadowmask_texture(int p_index) const = 0;
 	virtual int get_bake_mesh_count() const = 0;
+	virtual bool get_bake_mesh_is_contribute_only(int p_index) const = 0;
 	virtual Variant get_bake_mesh_userdata(int p_index) const = 0;
 	virtual Rect2 get_bake_mesh_uv_scale(int p_index) const = 0;
 	virtual int get_bake_mesh_texture_slice(int p_index) const = 0;
