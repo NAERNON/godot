@@ -156,7 +156,7 @@ void AnimationPlayer::_notification(int p_what) {
 	}
 }
 
-void AnimationPlayer::_process_playback_data(PlaybackData &cd, double p_delta, float p_blend, bool p_seeked, bool p_internal_seeked, bool p_started, bool p_is_current) {
+void AnimationPlayer::_process_playback_data(PlaybackData &cd, double p_delta, float p_blend, bool p_seeked, bool p_internal_seeked, bool p_started, bool &r_end_reached, bool p_is_current) {
 	double speed = speed_scale * cd.speed_scale;
 	bool backwards = std::signbit(speed); // Negative zero means playing backwards too.
 	double delta = p_started ? 0 : p_delta * speed;
@@ -206,22 +206,27 @@ void AnimationPlayer::_process_playback_data(PlaybackData &cd, double p_delta, f
 	double prev_pos = cd.pos; // The animation may be changed during process, so it is safer that the state is changed before process.
 
 	// End detection.
-	if (p_is_current) {
-		if (cd.from->animation->get_loop_mode() == Animation::LOOP_NONE) {
-			if (!backwards && Animation::is_less_or_equal_approx(prev_pos, end) && Math::is_equal_approx(next_pos, end)) {
+	r_end_reached = false;
+	if (cd.from->animation->get_loop_mode() == Animation::LOOP_NONE) {
+		if (!backwards && Animation::is_less_or_equal_approx(prev_pos, end) && Math::is_equal_approx(next_pos, end)) {
+			if (p_is_current) {
 				// Playback finished.
 				next_pos = end; // Snap to the edge.
 				end_reached = true;
 				end_notify = Animation::is_less_approx(prev_pos, end); // Notify only if not already at the end.
 				p_blend = 1.0;
 			}
-			if (backwards && Animation::is_greater_or_equal_approx(prev_pos, start) && Math::is_equal_approx(next_pos, start)) {
+			r_end_reached = true;
+		}
+		if (backwards && Animation::is_greater_or_equal_approx(prev_pos, start) && Math::is_equal_approx(next_pos, start)) {
+			if (p_is_current) {
 				// Playback finished.
 				next_pos = start; // Snap to the edge.
 				end_reached = true;
 				end_notify = Animation::is_greater_approx(prev_pos, start); // Notify only if not already at the beginning.
 				p_blend = 1.0;
 			}
+			r_end_reached = true;
 		}
 	}
 
@@ -248,6 +253,7 @@ void AnimationPlayer::_process_playback_data(PlaybackData &cd, double p_delta, f
 	pi.is_external_seeking = !p_internal_seeked && !p_started;
 	pi.looped_flag = looped_flag;
 	pi.weight = p_blend;
+	pi.track_weights = cd.track_weights;
 	make_animation_instance(cd.from->name, pi);
 }
 
@@ -271,10 +277,12 @@ void AnimationPlayer::_blend_playback_data(double p_delta, bool p_started) {
 		c.internal_seeked = false;
 	}
 
-	// Second, process current animation to check if the animation end reached.
-	_process_playback_data(c.current, p_delta, get_current_blend_amount(), seeked, internal_seeked, p_started, true);
+	bool anim_end_reached = false;
 
-	// Finally, if not end the animation, do blending.
+	// Second, process current animation to check if the animation end reached.
+	_process_playback_data(c.current, p_delta, get_current_blend_amount(), seeked, internal_seeked, p_started, anim_end_reached, true);
+
+	// Then, if not end the animation, do blending.
 	if (end_reached) {
 		playback.blend.clear();
 		if (end_notify) {
@@ -292,10 +300,23 @@ void AnimationPlayer::_blend_playback_data(double p_delta, bool p_started) {
 		}
 		// Note: There may be issues if an animation event triggers an animation change while this blend is active,
 		// so it is best to use "deferred" calls instead of "immediate" for animation events that can trigger new animations.
-		_process_playback_data(b.data, p_delta, b.blend_left, false, false, false);
+		_process_playback_data(b.data, p_delta, b.blend_left, false, false, false, anim_end_reached);
 	}
 	for (List<Blend>::Element *&E : to_erase) {
 		c.blend.erase(E);
+	}
+
+	// Finally, if not end the animation, do mix.
+	List<List<PlaybackData>::Element *> mix_to_erase;
+	for (List<PlaybackData>::Element *E = c.mix.front(); E; E = E->next()) {
+		PlaybackData &p = E->get();
+		_process_playback_data(p, p_delta, 1.0, false, false, false, anim_end_reached);
+		if (anim_end_reached) {
+			mix_to_erase.push_back(E);
+		}
+	}
+	for (List<PlaybackData>::Element *&E : mix_to_erase) {
+		c.mix.erase(E);
 	}
 }
 
@@ -399,12 +420,24 @@ void AnimationPlayer::play_backwards(const StringName &p_name, double p_custom_b
 	play(p_name, p_custom_blend, -1, true);
 }
 
+void AnimationPlayer::mix_backwards(const StringName &p_name) {
+	mix(p_name, -1, true);
+}
+
 void AnimationPlayer::play_section_with_markers_backwards(const StringName &p_name, const StringName &p_start_marker, const StringName &p_end_marker, double p_custom_blend) {
 	play_section_with_markers(p_name, p_start_marker, p_end_marker, p_custom_blend, -1, true);
 }
 
+void AnimationPlayer::mix_section_with_markers_backwards(const StringName &p_name, const StringName &p_start_marker, const StringName &p_end_marker) {
+	mix_section_with_markers(p_name, p_start_marker, p_end_marker, -1, true);
+}
+
 void AnimationPlayer::play_section_backwards(const StringName &p_name, double p_start_time, double p_end_time, double p_custom_blend) {
 	play_section(p_name, p_start_time, p_end_time, p_custom_blend, -1, true);
+}
+
+void AnimationPlayer::mix_section_backwards(const StringName &p_name, double p_start_time, double p_end_time) {
+	mix_section(p_name, p_start_time, p_end_time, -1, true);
 }
 
 void AnimationPlayer::play(const StringName &p_name, double p_custom_blend, float p_custom_scale, bool p_from_end) {
@@ -415,8 +448,16 @@ void AnimationPlayer::play(const StringName &p_name, double p_custom_blend, floa
 	}
 }
 
+void AnimationPlayer::mix(const StringName &p_name, float p_custom_scale, bool p_from_end) {
+	_mix(p_name, p_custom_scale, p_from_end);
+}
+
 void AnimationPlayer::_play(const StringName &p_name, double p_custom_blend, float p_custom_scale, bool p_from_end) {
 	play_section_with_markers(p_name, StringName(), StringName(), p_custom_blend, p_custom_scale, p_from_end);
+}
+
+void AnimationPlayer::_mix(const StringName &p_name, float p_custom_scale, bool p_from_end) {
+	mix_section_with_markers(p_name, StringName(), StringName(), p_custom_scale, p_from_end);
 }
 
 void AnimationPlayer::play_section_with_markers(const StringName &p_name, const StringName &p_start_marker, const StringName &p_end_marker, double p_custom_blend, float p_custom_scale, bool p_from_end) {
@@ -447,6 +488,64 @@ void AnimationPlayer::play_section_with_markers(const StringName &p_name, const 
 	}
 
 	play_section(name, start_time, end_time, p_custom_blend, p_custom_scale, p_from_end);
+}
+
+void AnimationPlayer::mix_section_with_markers(const StringName &p_name, const StringName &p_start_marker, const StringName &p_end_marker, float p_custom_scale, bool p_from_end) {
+	StringName name = p_name;
+
+	if (name == StringName()) {
+		name = playback.assigned;
+	}
+
+	ERR_FAIL_COND_MSG(!animation_set.has(name), vformat("Animation not found: %s.", name));
+
+	Ref<Animation> animation = animation_set[name].animation;
+
+	ERR_FAIL_COND_MSG(p_start_marker == p_end_marker && p_start_marker, vformat("Start marker and end marker cannot be the same marker: %s.", p_start_marker));
+	ERR_FAIL_COND_MSG(p_start_marker && !animation->has_marker(p_start_marker), vformat("Marker %s not found in animation: %s.", p_start_marker, name));
+	ERR_FAIL_COND_MSG(p_end_marker && !animation->has_marker(p_end_marker), vformat("Marker %s not found in animation: %s.", p_end_marker, name));
+
+	double start_time = p_start_marker ? animation->get_marker_time(p_start_marker) : -1;
+	double end_time = p_end_marker ? animation->get_marker_time(p_end_marker) : -1;
+
+	ERR_FAIL_COND_MSG(p_start_marker && p_end_marker && Animation::is_greater_approx(start_time, end_time), vformat("End marker %s is placed earlier than start marker %s in animation: %s.", p_end_marker, p_start_marker, name));
+
+	if (p_start_marker && Animation::is_less_approx(start_time, 0)) {
+		WARN_PRINT_ED(vformat("Negative time start marker: %s is invalid in the section, so the start of the animation: %s is used instead.", p_start_marker, playback.current.from->animation->get_name()));
+	}
+	if (p_end_marker && Animation::is_less_approx(end_time, 0)) {
+		WARN_PRINT_ED(vformat("Negative time end marker: %s is invalid in the section, so the end of the animation: %s is used instead.", p_end_marker, playback.current.from->animation->get_name()));
+	}
+
+	mix_section(name, start_time, end_time, p_custom_scale, p_from_end);
+}
+
+void AnimationPlayer::set_animation_filter(const StringName &p_name, TypedArray<NodePath> p_filter, bool p_invert) {
+	ERR_FAIL_COND_MSG(!animation_set.has(p_name), vformat("Animation not found: %s.", p_name));
+
+	if (!cache_valid) {
+		_update_caches(); // Need to get track_map.
+	}
+
+	Ref<Animation> anim = animation_set[p_name].animation;
+
+	LocalVector<real_t> weights;
+	weights.resize(anim->get_track_count());
+
+	real_t default_val = p_invert ? 1.0 : 0.0;
+	real_t weight_val = p_invert ? 0.0 : 1.0;
+
+	for (int i = 0; i < anim->get_track_count(); i++) {
+		weights[i] = default_val;
+	}
+
+	for (NodePath node_path : p_filter) {
+		if (track_map.has(node_path)) {
+			weights[track_map[node_path]] = weight_val;
+		}
+	}
+
+	track_weights[p_name] = Vector<real_t>(weights);
 }
 
 void AnimationPlayer::play_section(const StringName &p_name, double p_start_time, double p_end_time, double p_custom_blend, float p_custom_scale, bool p_from_end) {
@@ -520,6 +619,11 @@ void AnimationPlayer::play_section(const StringName &p_name, double p_start_time
 	if (c.assigned != name) { // Reset.
 		c.current.pos = p_from_end ? end : start;
 		c.assigned = name;
+		if (track_weights.has(name)) {
+			c.current.track_weights = track_weights[name];
+		} else {
+			c.current.track_weights.clear();
+		}
 		emit_signal(SNAME("current_animation_changed"), c.assigned);
 	} else {
 		if (p_from_end && Animation::is_less_or_equal_approx(c.current.pos, start)) {
@@ -549,6 +653,34 @@ void AnimationPlayer::play_section(const StringName &p_name, double p_start_time
 	if (next != StringName() && animation_set.has(next)) {
 		queue(next);
 	}
+}
+
+void AnimationPlayer::mix_section(const StringName &p_name, double p_start_time, double p_end_time, float p_custom_scale, bool p_from_end) {
+	StringName name = p_name;
+
+	if (name == StringName()) {
+		name = playback.assigned;
+	}
+
+	ERR_FAIL_COND_MSG(!animation_set.has(name), vformat("Animation not found: %s.", name));
+	ERR_FAIL_COND_MSG(p_start_time >= 0 && p_end_time >= 0 && Math::is_equal_approx(p_start_time, p_end_time), "Start time and end time must not equal to each other.");
+	ERR_FAIL_COND_MSG(p_start_time >= 0 && p_end_time >= 0 && Animation::is_greater_approx(p_start_time, p_end_time), vformat("Start time %f is greater than end time %f.", p_start_time, p_end_time));
+
+	double start = playback.current.get_start_time();
+	double end = playback.current.get_end_time();
+
+	PlaybackData mix;
+	mix.from = &animation_set[name];
+	mix.speed_scale = p_custom_scale;
+	mix.start_time = p_start_time;
+	mix.end_time = p_end_time;
+	mix.pos = p_from_end ? end : start;
+
+	if (track_weights.has(name)) {
+		mix.track_weights = track_weights[name];
+	}
+
+	playback.mix.push_back(mix);
 }
 
 void AnimationPlayer::_capture(const StringName &p_name, bool p_from_end, double p_duration, Tween::TransitionType p_trans_type, Tween::EaseType p_ease_type) {
@@ -925,6 +1057,8 @@ void AnimationPlayer::_animation_removed(const StringName &p_name, const StringN
 		blend_times.erase(to_erase.front()->get());
 		to_erase.pop_front();
 	}
+
+	track_weights.erase(name);
 }
 
 void AnimationPlayer::_rename_animation(const StringName &p_from_name, const StringName &p_to_name) {
@@ -962,6 +1096,12 @@ void AnimationPlayer::_rename_animation(const StringName &p_from_name, const Str
 		to_insert.remove(to_insert.begin());
 	}
 
+	if (track_weights.has(p_from_name)) {
+		Vector<real_t> weights = track_weights[p_from_name];
+		track_weights.erase(p_from_name);
+		track_weights[p_to_name] = weights;
+	}
+
 	if (autoplay == p_from_name) {
 		autoplay = p_to_name;
 	}
@@ -993,6 +1133,13 @@ void AnimationPlayer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("play_section_with_markers_backwards", "name", "start_marker", "end_marker", "custom_blend"), &AnimationPlayer::play_section_with_markers_backwards, DEFVAL(StringName()), DEFVAL(StringName()), DEFVAL(StringName()), DEFVAL(-1));
 	ClassDB::bind_method(D_METHOD("play_section_backwards", "name", "start_time", "end_time", "custom_blend"), &AnimationPlayer::play_section_backwards, DEFVAL(StringName()), DEFVAL(-1), DEFVAL(-1), DEFVAL(-1));
 	ClassDB::bind_method(D_METHOD("play_with_capture", "name", "duration", "custom_blend", "custom_speed", "from_end", "trans_type", "ease_type"), &AnimationPlayer::play_with_capture, DEFVAL(StringName()), DEFVAL(-1.0), DEFVAL(-1), DEFVAL(1.0), DEFVAL(false), DEFVAL(Tween::TRANS_LINEAR), DEFVAL(Tween::EASE_IN));
+	ClassDB::bind_method(D_METHOD("mix", "name", "custom_speed", "from_end"), &AnimationPlayer::mix, DEFVAL(StringName()), DEFVAL(1.0), DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("mix_section_with_markers", "name", "start_marker", "end_marker", "custom_speed", "from_end"), &AnimationPlayer::mix_section_with_markers, DEFVAL(StringName()), DEFVAL(StringName()), DEFVAL(StringName()), DEFVAL(1.0), DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("mix_section", "name", "start_time", "end_time", "custom_speed", "from_end"), &AnimationPlayer::mix_section, DEFVAL(StringName()), DEFVAL(-1), DEFVAL(-1), DEFVAL(1.0), DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("mix_backwards", "name"), &AnimationPlayer::mix_backwards, DEFVAL(StringName()));
+	ClassDB::bind_method(D_METHOD("mix_section_with_markers_backwards", "name", "start_marker", "end_marker"), &AnimationPlayer::mix_section_with_markers_backwards, DEFVAL(StringName()), DEFVAL(StringName()), DEFVAL(StringName()));
+	ClassDB::bind_method(D_METHOD("mix_section_backwards", "name", "start_time", "end_time"), &AnimationPlayer::mix_section_backwards, DEFVAL(StringName()), DEFVAL(-1), DEFVAL(-1));
+	ClassDB::bind_method(D_METHOD("set_animation_filter", "name", "filter", "invert"), &AnimationPlayer::set_animation_filter, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("pause"), &AnimationPlayer::pause);
 	ClassDB::bind_method(D_METHOD("stop", "keep_state"), &AnimationPlayer::stop, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("is_playing"), &AnimationPlayer::is_playing);

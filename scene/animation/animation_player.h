@@ -64,6 +64,7 @@ private:
 
 	struct PlaybackData {
 		AnimationData *from = nullptr;
+		Vector<real_t> track_weights = {};
 		double pos = 0.0;
 		float speed_scale = 1.0;
 		double start_time = 0.0;
@@ -95,6 +96,7 @@ private:
 		bool internal_seeked = false;
 		bool started = false;
 		List<Blend> blend;
+		List<PlaybackData> mix;
 	} playback;
 
 	struct BlendKey {
@@ -116,6 +118,7 @@ private:
 	};
 
 	HashMap<BlendKey, double, BlendKey> blend_times;
+	HashMap<StringName, Vector<real_t>> track_weights;
 
 	List<StringName> playback_queue;
 	ObjectID tmp_from;
@@ -127,8 +130,9 @@ private:
 	bool movie_quit_on_finish = false;
 
 	void _play(const StringName &p_name, double p_custom_blend = -1, float p_custom_scale = 1.0, bool p_from_end = false);
+	void _mix(const StringName &p_name, float p_custom_scale = 1.0, bool p_from_end = false);
 	void _capture(const StringName &p_name, bool p_from_end = false, double p_duration = -1.0, Tween::TransitionType p_trans_type = Tween::TRANS_LINEAR, Tween::EaseType p_ease_type = Tween::EASE_IN);
-	void _process_playback_data(PlaybackData &cd, double p_delta, float p_blend, bool p_seeked, bool p_internal_seeked, bool p_started, bool p_is_current = false);
+	void _process_playback_data(PlaybackData &cd, double p_delta, float p_blend, bool p_seeked, bool p_internal_seeked, bool p_started, bool &r_end_reached, bool p_is_current = false);
 	void _blend_playback_data(double p_delta, bool p_started);
 	void _stop_internal(bool p_reset, bool p_keep_state);
 	void _check_immediately_after_start();
@@ -206,6 +210,13 @@ public:
 	void play_section_with_markers_backwards(const StringName &p_name = StringName(), const StringName &p_start_marker = StringName(), const StringName &p_end_marker = StringName(), double p_custom_blend = -1);
 	void play_section_backwards(const StringName &p_name = StringName(), double p_start_time = -1, double p_end_time = -1, double p_custom_blend = -1);
 	void play_with_capture(const StringName &p_name = StringName(), double p_duration = -1.0, double p_custom_blend = -1, float p_custom_scale = 1.0, bool p_from_end = false, Tween::TransitionType p_trans_type = Tween::TRANS_LINEAR, Tween::EaseType p_ease_type = Tween::EASE_IN);
+	void mix(const StringName &p_name = StringName(), float p_custom_scale = 1.0, bool p_from_end = false);
+	void mix_section_with_markers(const StringName &p_name = StringName(), const StringName &p_start_marker = StringName(), const StringName &p_end_marker = StringName(), float p_custom_scale = 1.0, bool p_from_end = false);
+	void mix_section(const StringName &p_name = StringName(), double p_start_time = -1, double p_end_time = -1, float p_custom_scale = 1.0, bool p_from_end = false);
+	void mix_backwards(const StringName &p_name = StringName());
+	void mix_section_with_markers_backwards(const StringName &p_name = StringName(), const StringName &p_start_marker = StringName(), const StringName &p_end_marker = StringName());
+	void mix_section_backwards(const StringName &p_name = StringName(), double p_start_time = -1, double p_end_time = -1);
+	void set_animation_filter(const StringName &p_name, TypedArray<NodePath> p_filter, bool p_invert = false);
 	void queue(const StringName &p_name);
 	TypedArray<StringName> get_queue();
 	void clear_queue();
