@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Workspace
+   version = "1.0">
+   <FileRef
+      location = "group:core">
+   </FileRef>
+   <FileRef
+      location = "group:doc">
+   </FileRef>
+   <FileRef
+      location = "group:drivers">
+   </FileRef>
+   <FileRef
+      location = "group:editor">
+   </FileRef>
+   <FileRef
+      location = "group:main">
+   </FileRef>
+   <FileRef
+      location = "group:misc">
+   </FileRef>
+   <FileRef
+      location = "group:modules">
+   </FileRef>
+   <FileRef
+      location = "group:platform">
+   </FileRef>
+   <FileRef
+      location = "group:scene">
+   </FileRef>
+   <FileRef
+      location = "group:servers">
+   </FileRef>
+   <FileRef
+      location = "group:tests">
+   </FileRef>
+   <FileRef
+      location = "group:thirdparty">
+   </FileRef>
+</Workspace>
