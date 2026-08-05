@@ -77,13 +77,13 @@ layout(location = 13) in vec4 previous_normal_attrib;
 
 #endif // MOTION_VECTORS
 
-void axis_angle_to_tbn(vec3 axis, float angle, out vec3 tangent, out vec3 binormal, out vec3 normal) {
+void axis_angle_to_tn(vec3 axis, float angle, out vec3 tangent, out vec3 normal) {
 	float c = cos(angle);
 	float s = sin(angle);
 	vec3 omc_axis = (1.0 - c) * axis;
 	vec3 s_axis = s * axis;
 	tangent = omc_axis.xxx * axis + vec3(c, -s_axis.z, s_axis.y);
-	binormal = omc_axis.yyy * axis + vec3(s_axis.z, c, -s_axis.x);
+	//binormal = omc_axis.yyy * axis + vec3(s_axis.z, c, -s_axis.x);
 	normal = omc_axis.zzz * axis + vec3(-s_axis.y, s_axis.x, c);
 }
 
@@ -108,13 +108,12 @@ layout(location = 4) out vec2 uv2_interp;
 #endif
 
 #ifdef TANGENT_USED
-layout(location = 5) out vec3 tangent_interp;
-layout(location = 6) out vec3 binormal_interp;
+layout(location = 5) out vec4 tangent_interp;
 #endif
 
 #ifdef MOTION_VECTORS
-layout(location = 7) out vec4 screen_position;
-layout(location = 8) out vec4 prev_screen_position;
+layout(location = 6) out vec4 screen_position;
+layout(location = 7) out vec4 prev_screen_position;
 #endif
 
 #ifdef MATERIAL_UNIFORMS_USED
@@ -129,11 +128,11 @@ float global_time;
 
 #ifdef MODE_DUAL_PARABOLOID
 
-layout(location = 9) out float dp_clip;
+layout(location = 8) out float dp_clip;
 
 #endif
 
-layout(location = 10) out flat uint instance_index_interp;
+layout(location = 9) out flat uint instance_index_interp;
 
 #ifdef USE_MULTIVIEW
 #extension GL_EXT_multiview : enable
@@ -145,7 +144,7 @@ vec3 multiview_uv(vec2 uv) {
 ivec3 multiview_uv(ivec2 uv) {
 	return ivec3(uv, int(ViewIndex));
 }
-layout(location = 11) out vec4 combined_projected;
+layout(location = 10) out vec4 combined_projected;
 #else // USE_MULTIVIEW
 #define ViewIndex 0
 vec2 multiview_uv(vec2 uv) {
@@ -157,8 +156,8 @@ ivec2 multiview_uv(ivec2 uv) {
 #endif //USE_MULTIVIEW
 
 #if !defined(MODE_RENDER_DEPTH) && !defined(MODE_UNSHADED) && defined(USE_VERTEX_LIGHTING)
-layout(location = 12) out vec4 diffuse_light_interp;
-layout(location = 13) out vec4 specular_light_interp;
+layout(location = 11) out vec4 diffuse_light_interp;
+layout(location = 12) out vec4 specular_light_interp;
 
 #include "../scene_forward_vertex_lights_inc.glsl"
 
@@ -179,7 +178,7 @@ uint cluster_get_range_clip_mask(uint i, uint z_min, uint z_max) {
 #endif // !defined(MODE_RENDER_DEPTH) && !defined(MODE_UNSHADED) && defined(USE_VERTEX_LIGHTING)
 
 #if defined(POINT_SIZE_USED) && defined(POINT_COORD_USED)
-layout(location = 14) out vec2 point_coord_interp;
+layout(location = 13) out vec2 point_coord_interp;
 #endif
 
 invariant gl_Position;
@@ -225,8 +224,7 @@ void vertex_shader(vec3 vertex_input,
 		in vec3 normal_input,
 #endif
 #ifdef TANGENT_USED
-		in vec3 tangent_input,
-		in vec3 binormal_input,
+		in vec4 tangent_input,
 #endif
 		in uint instance_index, in uint multimesh_offset, in SceneData scene_data, in mat3x4 in_model_matrix,
 #ifdef USE_DOUBLE_PRECISION
@@ -352,8 +350,7 @@ void vertex_shader(vec3 vertex_input,
 #endif
 
 #ifdef TANGENT_USED
-	vec3 tangent = tangent_input;
-	vec3 binormal = binormal_input;
+	vec3 tangent = tangent_input.xyz;
 #endif
 
 #ifdef UV_USED
@@ -400,10 +397,7 @@ void vertex_shader(vec3 vertex_input,
 #endif
 
 #ifdef TANGENT_USED
-
-	tangent = model_normal_matrix * tangent;
-	binormal = model_normal_matrix * binormal;
-
+	tangent = mat3(model_matrix) * tangent;
 #endif
 #endif
 
@@ -465,9 +459,7 @@ void vertex_shader(vec3 vertex_input,
 #endif
 
 #ifdef TANGENT_USED
-
-	binormal = modelview_normal * binormal;
-	tangent = modelview_normal * tangent;
+	tangent = mat3(modelview) * tangent;
 #endif
 #endif // !defined(SKIP_TRANSFORM_USED) && !defined(VERTEX_WORLD_COORDS_USED)
 
@@ -480,7 +472,6 @@ void vertex_shader(vec3 vertex_input,
 #endif
 
 #ifdef TANGENT_USED
-	binormal = (read_view_matrix * vec4(binormal, 0.0)).xyz;
 	tangent = (read_view_matrix * vec4(tangent, 0.0)).xyz;
 #endif
 #endif
@@ -494,8 +485,7 @@ void vertex_shader(vec3 vertex_input,
 #endif
 
 #ifdef TANGENT_USED
-	tangent_interp = normalize(tangent);
-	binormal_interp = normalize(binormal);
+	tangent_interp = vec4(normalize(tangent), tangent_input.w);
 #endif
 
 #ifdef MODE_RENDER_DEPTH
@@ -553,7 +543,6 @@ void vertex_shader(vec3 vertex_input,
 	uint cluster_z = uint(clamp((-vertex_interp.z / scene_data.z_far) * 32.0, 0.0, 31.0));
 
 	{ //omni lights
-
 		uint cluster_omni_offset = cluster_offset;
 
 		uint item_min;
@@ -623,7 +612,6 @@ void vertex_shader(vec3 vertex_input,
 	}
 
 	{ // Directional light.
-
 		// We process the first directional light separately as it may have shadows.
 		vec3 directional_diffuse = vec3(0.0);
 		vec3 directional_specular = vec3(0.0);
@@ -732,8 +720,7 @@ void _unpack_vertex_attributes(vec4 p_vertex_in, vec3 p_compressed_aabb_position
 #ifdef NORMAL_USED
 		out vec3 r_normal,
 #endif
-		out vec3 r_tangent,
-		out vec3 r_binormal,
+		out vec4 r_tangent,
 #endif
 		out vec3 r_vertex) {
 
@@ -743,25 +730,20 @@ void _unpack_vertex_attributes(vec4 p_vertex_in, vec3 p_compressed_aabb_position
 #endif
 
 #if defined(NORMAL_USED) || defined(TANGENT_USED)
-
-	float binormal_sign;
-
 	// This works because the oct value (0, 1) maps onto (0, 0, -1) which encodes to (1, 1).
 	// Accordingly, if p_normal_in.z contains octahedral values, it won't equal (0, 1).
 	if (p_normal_in.z > 0.0 || p_normal_in.w < 1.0) {
 		// Uncompressed format.
 		vec2 signed_tangent_attrib = p_normal_in.zw * 2.0 - 1.0;
-		r_tangent = oct_to_vec3(vec2(signed_tangent_attrib.x, abs(signed_tangent_attrib.y) * 2.0 - 1.0));
-		binormal_sign = sign(signed_tangent_attrib.y);
-		r_binormal = normalize(cross(r_normal, r_tangent) * binormal_sign);
+		r_tangent = vec4(oct_to_vec3(vec2(signed_tangent_attrib.x, abs(signed_tangent_attrib.y) * 2.0 - 1.0)), sign(signed_tangent_attrib.y));
 	} else {
 		// Compressed format.
 		float angle = p_vertex_in.w;
-		binormal_sign = angle > 0.5 ? 1.0 : -1.0; // 0.5 does not exist in UNORM16, so values are either greater or smaller.
+		float binormal_sign = angle > 0.5 ? 1.0 : -1.0; // 0.5 does not exist in UNORM16, so values are either greater or smaller.
 		angle = abs(angle * 2.0 - 1.0) * M_PI; // 0.5 is basically zero, allowing to encode both signs reliably.
 		vec3 axis = r_normal;
-		axis_angle_to_tbn(axis, angle, r_tangent, r_binormal, r_normal);
-		r_binormal *= binormal_sign;
+		axis_angle_to_tn(axis, angle, r_tangent.xyz, r_normal);
+		r_tangent.w = binormal_sign;
 	}
 #endif
 }
@@ -781,8 +763,7 @@ void main() {
 	vec3 prev_normal;
 #endif
 #if defined(NORMAL_USED) || defined(TANGENT_USED)
-	vec3 prev_tangent;
-	vec3 prev_binormal;
+	vec4 prev_tangent;
 #endif
 
 	_unpack_vertex_attributes(
@@ -796,7 +777,6 @@ void main() {
 			prev_normal,
 #endif
 			prev_tangent,
-			prev_binormal,
 #endif
 			prev_vertex);
 
@@ -807,7 +787,6 @@ void main() {
 #endif
 #ifdef TANGENT_USED
 			prev_tangent,
-			prev_binormal,
 #endif
 			instance_index, draw_call.multimesh_motion_vectors_previous_offset, scene_data_block.prev_data, instances.data[instance_index].prev_transform,
 #ifdef USE_DOUBLE_PRECISION
@@ -824,8 +803,7 @@ void main() {
 	vec3 normal;
 #endif
 #if defined(NORMAL_USED) || defined(TANGENT_USED)
-	vec3 tangent;
-	vec3 binormal;
+	vec4 tangent;
 #endif
 
 	_unpack_vertex_attributes(
@@ -838,7 +816,6 @@ void main() {
 			normal,
 #endif
 			tangent,
-			binormal,
 #endif
 			vertex);
 
@@ -850,7 +827,6 @@ void main() {
 #endif
 #ifdef TANGENT_USED
 			tangent,
-			binormal,
 #endif
 			instance_index, draw_call.multimesh_motion_vectors_current_offset, scene_data_block.data, instances.data[instance_index].transform,
 #ifdef USE_DOUBLE_PRECISION
@@ -901,22 +877,21 @@ layout(location = 4) in vec2 uv2_interp;
 #endif
 
 #ifdef TANGENT_USED
-layout(location = 5) in vec3 tangent_interp;
-layout(location = 6) in vec3 binormal_interp;
+layout(location = 5) in vec4 tangent_interp;
 #endif
 
 #ifdef MOTION_VECTORS
-layout(location = 7) in vec4 screen_position;
-layout(location = 8) in vec4 prev_screen_position;
+layout(location = 6) in vec4 screen_position;
+layout(location = 7) in vec4 prev_screen_position;
 #endif
 
 #ifdef MODE_DUAL_PARABOLOID
 
-layout(location = 9) in float dp_clip;
+layout(location = 8) in float dp_clip;
 
 #endif
 
-layout(location = 10) in flat uint instance_index_interp;
+layout(location = 9) in flat uint instance_index_interp;
 
 #ifdef USE_LIGHTMAP
 // w0, w1, w2, and w3 are the four cubic B-spline basis functions
@@ -988,7 +963,7 @@ vec3 multiview_uv(vec2 uv) {
 ivec3 multiview_uv(ivec2 uv) {
 	return ivec3(uv, int(ViewIndex));
 }
-layout(location = 11) in vec4 combined_projected;
+layout(location = 10) in vec4 combined_projected;
 #else // USE_MULTIVIEW
 #define ViewIndex 0
 vec2 multiview_uv(vec2 uv) {
@@ -999,12 +974,12 @@ ivec2 multiview_uv(ivec2 uv) {
 }
 #endif // !USE_MULTIVIEW
 #if !defined(MODE_RENDER_DEPTH) && !defined(MODE_UNSHADED) && defined(USE_VERTEX_LIGHTING)
-layout(location = 12) in vec4 diffuse_light_interp;
-layout(location = 13) in vec4 specular_light_interp;
+layout(location = 11) in vec4 diffuse_light_interp;
+layout(location = 12) in vec4 specular_light_interp;
 #endif
 
 #if defined(POINT_SIZE_USED) && defined(POINT_COORD_USED)
-layout(location = 14) in vec2 point_coord_interp;
+layout(location = 13) in vec2 point_coord_interp;
 #endif
 
 //defines to keep compatibility with vertex
@@ -1250,14 +1225,6 @@ void fragment_shader(in SceneData scene_data) {
 
 	float alpha_highp = float(instances.data[instance_index].flags >> INSTANCE_FLAGS_FADE_SHIFT) / float(255.0);
 
-#ifdef TANGENT_USED
-	vec3 binormal = binormal_interp;
-	vec3 tangent = tangent_interp;
-#else
-	vec3 binormal = vec3(0.0);
-	vec3 tangent = vec3(0.0);
-#endif
-
 #ifdef NORMAL_USED
 	vec3 normal_highp = normal_interp;
 #if defined(DO_SIDE_CHECK)
@@ -1266,6 +1233,14 @@ void fragment_shader(in SceneData scene_data) {
 	}
 #endif // DO_SIDE_CHECK
 #endif // NORMAL_USED
+
+#ifdef TANGENT_USED
+	vec3 tangent = tangent_interp.xyz;
+	vec3 binormal = cross(normal_highp, tangent) * tangent_interp.w;
+#else
+	vec3 tangent = vec3(0.0);
+	vec3 binormal = vec3(0.0);
+#endif
 
 #ifdef UV_USED
 	vec2 uv = uv_interp;
